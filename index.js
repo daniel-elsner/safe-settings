@@ -476,7 +476,7 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const isPullRequest = Array.isArray(pullRequests) && typeof pullRequests[0] !== 'undefined'
     const isMergeQueue = headBranch.startsWith('gh-readonly-queue/')
 
-    if (!isPullRequest && isMergeQueue) {
+    if (!isPullRequest && !isMergeQueue) {
       robot.log.debug('Not working on a PR, returning...')
       return
     }
