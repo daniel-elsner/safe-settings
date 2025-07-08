@@ -459,12 +459,12 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const adminRepo = repository.name === env.ADMIN_REPO
     robot.log.debug(`Is Admin repo event ${adminRepo}`)
     if (!adminRepo) {
-      robot.log.debug('Not working on the Admin repo, returning...')
+      robot.log.debug('Not working on the Admin repo, returning...', { adminRepo, repository, ADMIN_REPO: env.ADMIN_REPO })
       return
     }
     const defaultBranch = payload.check_suite.head_branch === repository.default_branch
     if (defaultBranch) {
-      robot.log.debug(' Working on the default branch, returning...')
+      robot.log.debug('Working on the default branch, returning...', { defaultBranch, check_suite: payload.check_suite })
       return
     }
     const {
@@ -473,11 +473,15 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       pull_requests: pullRequests
     } = context.payload.check_suite
 
-    if (!Array.isArray(pullRequests) || !pullRequests[0]) {
+    const isPullRequest = Array.isArray(pullRequests) && typeof pullRequests[0] !== 'undefined'
+    const isMergeQueue = headBranch.startsWith('gh-readonly-queue/')
+
+    if (!isPullRequest && isMergeQueue) {
       robot.log.debug('Not working on a PR, returning...')
       return
     }
-    const pull_request = payload.check_suite.pull_requests[0]
+
+    const pull_request = isPullRequest ? payload.check_suite.pull_requests[0] : null
     return createCheckRun(context, pull_request, headSha, headBranch)
   })
 
