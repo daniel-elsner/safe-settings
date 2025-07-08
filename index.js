@@ -538,14 +538,17 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const { check_run } = payload
     const { check_suite } = check_run
     const pull_request = check_suite.pull_requests[0]
-    const source = payload.check_run.name === 'Safe-setting validator'
-    if (!source) {
-      robot.log.debug(' Not triggered by Safe-settings...')
+    const isSafeSettings = check_run.name === 'Safe-setting validator' || check_run.name === 'Safe-Settings'
+
+    const pullRequestNumber = pull_request?.number ?? parseInt(check_suite.head_branch.match(/gh-readonly-queue\/main\/pr-(\d+)/)?.[1])
+
+    if (!isSafeSettings) {
+      robot.log.debug('Not triggered by Safe-settings...')
       return
     }
 
     if (check_run.status === 'completed') {
-      robot.log.debug(' Checkrun created as completed, returning')
+      robot.log.debug('Checkrun created as completed, returning')
       return
     }
 
@@ -556,8 +559,8 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       return
     }
 
-    if (!pull_request) {
-      robot.log.debug('Not working on a PR, returning...')
+    if (typeof pullRequestNumber !== 'number' || isNaN(pullRequestNumber)) {
+      robot.log.debug('Not working on a PR ...')
       return
     }
 
@@ -578,7 +581,9 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     if (check_suite.before === '0000000000000000000000000000000000000000') {
       check_suite.before = check_suite.pull_requests[0].base.sha
     }
-    params = Object.assign(context.repo(), { pull_number: pull_request.number, per_page: 100 })
+    params = Object.assign(context.repo(), { pull_number: pullRequestNumber, per_page: 100 })
+
+    robot.log.debug(`Fetchings files ${JSON.stringify(params)}`)
 
     const files = await context.octokit.paginate(context.octokit.pulls.listFiles, params, (response) => {
       const files = new Set()
@@ -594,7 +599,7 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       return Array.from(files)
     })
 
-    robot.log.debug('Files changed', { files })
+    robot.log.debug('Files changed', { files, params })
 
     const settingsModified = files.includes(Settings.FILE_PATH)
 
