@@ -587,8 +587,8 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     // guarding against null value from upstream libary that is
     // causing a 404 and the check to stall
     // from issue: https://github.com/github/safe-settings/issues/185#issuecomment-1075240374
-    if (check_suite.before === '0000000000000000000000000000000000000000') {
-      check_suite.before = check_suite.pull_requests[0].base.sha
+    if (check_suite.before === '0000000000000000000000000000000000000000' && pull_request) {
+      check_suite.before = pull_request?.base?.sha ?? check_suite.head_sha
     }
     params = Object.assign(context.repo(), { pull_number: pullRequestNumber, per_page: 100 })
 
