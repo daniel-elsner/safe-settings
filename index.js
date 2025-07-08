@@ -532,11 +532,13 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
   })
 
   robot.on(['check_run.created'], async context => {
-    robot.log.debug('Check run was created!')
     const { payload } = context
     const { repository } = payload
     const { check_run } = payload
     const { check_suite } = check_run
+
+    robot.log.debug('Check run was created!', { check_run })
+
     const pull_request = check_suite.pull_requests[0]
     const isSafeSettings = check_run.name === 'Safe-setting validator' || check_run.name === 'Safe-Settings'
 
@@ -546,24 +548,24 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const pullRequestRef = pull_request?.head?.ref ?? check_suite.head_branch
 
     if (!isSafeSettings) {
-      robot.log.debug('Not triggered by Safe-settings...')
+      robot.log.debug('Not triggered by Safe-settings...', { check_run })
       return
     }
 
     if (check_run.status === 'completed') {
-      robot.log.debug('Checkrun created as completed, returning')
+      robot.log.debug('Checkrun created as completed, returning', { check_run })
       return
     }
 
     const adminRepo = repository.name === env.ADMIN_REPO
     robot.log.debug(`Is Admin repo event ${adminRepo}`)
     if (!adminRepo) {
-      robot.log.debug('Not working on the Admin repo, returning...')
+      robot.log.debug('Not working on the Admin repo, returning...', { repository, ADMIN_REPO: env.ADMIN_REPO })
       return
     }
 
     if (typeof pullRequestNumber !== 'number' || isNaN(pullRequestNumber)) {
-      robot.log.debug('Not working on a PR ...')
+      robot.log.debug('Not working on a PR ...', { pullRequestNumber, mergeQueuePrNumber })
       return
     }
 
