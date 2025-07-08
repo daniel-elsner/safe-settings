@@ -540,7 +540,9 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const pull_request = check_suite.pull_requests[0]
     const isSafeSettings = check_run.name === 'Safe-setting validator' || check_run.name === 'Safe-Settings'
 
-    const pullRequestNumber = pull_request?.number ?? parseInt(check_suite.head_branch.match(/gh-readonly-queue\/main\/pr-(\d+)/)?.[1])
+    // merge queue branches have the format gh-readonly-queue/<target-branch>/pr-<number>
+    const mergeQueuePrNumber = parseInt(check_suite.head_branch.split('/').at(-1)?.replace('pr-', ''))
+    const pullRequestNumber = pull_request?.number ?? mergeQueuePrNumber
 
     if (!isSafeSettings) {
       robot.log.debug('Not triggered by Safe-settings...')
