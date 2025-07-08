@@ -543,6 +543,7 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     // merge queue branches have the format gh-readonly-queue/<target-branch>/pr-<number>
     const mergeQueuePrNumber = parseInt(check_suite.head_branch.split('/').at(-1)?.replace('pr-', ''))
     const pullRequestNumber = pull_request?.number ?? mergeQueuePrNumber
+    const pullRequestRef = pull_request?.head?.ref ?? check_suite.head_branch
 
     if (!isSafeSettings) {
       robot.log.debug('Not triggered by Safe-settings...')
@@ -607,20 +608,20 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
 
     if (settingsModified) {
       robot.log.debug(`Changes in '${Settings.FILE_PATH}' detected, doing a full synch...`)
-      return syncAllSettings(true, context, context.repo(), pull_request.head.ref)
+      return syncAllSettings(true, context, context.repo(), pullRequestRef)
     }
 
     const repoChanges = getChangedRepoConfigName(files, context.repo().owner)
     if (repoChanges.length > 0) {
       return Promise.all(repoChanges.map(repo => {
-        return syncSettings(true, context, repo, pull_request.head.ref)
+        return syncSettings(true, context, repo, pullRequestRef)
       }))
     }
 
     const subOrgChanges = getChangedSubOrgConfigName(files)
     if (subOrgChanges.length) {
       return Promise.all(subOrgChanges.map(suborg => {
-        return syncSubOrgSettings(true, context, suborg, context.repo(), pull_request.head.ref)
+        return syncSubOrgSettings(true, context, suborg, context.repo(), pullRequestRef)
       }))
     }
 
