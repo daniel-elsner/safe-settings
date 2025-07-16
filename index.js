@@ -190,6 +190,7 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
   }
   async function createCheckRun (context, pull_request, head_sha, head_branch) {
     const { payload } = context
+    // robot.log.debug(`Check suite was requested! for ${context.repo()} ${pull_request.number} ${head_sha} ${head_branch}`)
     const res = await context.octokit.checks.create({
       owner: payload.repository.owner.login,
       repo: payload.repository.name,
@@ -452,18 +453,18 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     }
   })
 
-  robot.on('check_suite.requested', async context => {
+  robot.on(['check_suite.requested', 'check_suite.rerequested'], async context => {
     const { payload } = context
     const { repository } = payload
     const adminRepo = repository.name === env.ADMIN_REPO
     robot.log.debug(`Is Admin repo event ${adminRepo}`)
     if (!adminRepo) {
-      robot.log.debug('Not working on the Admin repo, returning...')
+      robot.log.debug('Not working on the Admin repo, returning...', { adminRepo, repository, ADMIN_REPO: env.ADMIN_REPO })
       return
     }
     const defaultBranch = payload.check_suite.head_branch === repository.default_branch
     if (defaultBranch) {
-      robot.log.debug(' Working on the default branch, returning...')
+      robot.log.debug('Working on the default branch, returning...', { defaultBranch, check_suite: payload.check_suite })
       return
     }
     const {
@@ -472,11 +473,15 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       pull_requests: pullRequests
     } = context.payload.check_suite
 
-    if (!Array.isArray(pullRequests) || !pullRequests[0]) {
+    const isPullRequest = Array.isArray(pullRequests) && typeof pullRequests[0] !== 'undefined'
+    const isMergeQueue = headBranch.startsWith('gh-readonly-queue/')
+
+    if (!isPullRequest && !isMergeQueue) {
       robot.log.debug('Not working on a PR, returning...')
       return
     }
-    const pull_request = payload.check_suite.pull_requests[0]
+
+    const pull_request = isPullRequest ? payload.check_suite.pull_requests[0] : null
     return createCheckRun(context, pull_request, headSha, headBranch)
   })
 
@@ -520,43 +525,41 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     return createCheckRun(context, pull_request, payload.pull_request.head.sha, payload.pull_request.head.ref)
   })
 
-  robot.on(['check_suite.rerequested'], async context => {
-    robot.log.debug('Check suite was rerequested!')
-    return createCheckRun(context)
-  })
-
-  robot.on(['check_run.rerequested'], async context => {
-    robot.log.debug('Check run was rerequested!')
-    return createCheckRun(context)
-  })
-
   robot.on(['check_run.created'], async context => {
-    robot.log.debug('Check run was created!')
     const { payload } = context
     const { repository } = payload
     const { check_run } = payload
     const { check_suite } = check_run
+
+    robot.log.debug('Check run was created!', { check_run })
+
     const pull_request = check_suite.pull_requests[0]
-    const source = payload.check_run.name === 'Safe-setting validator'
-    if (!source) {
-      robot.log.debug(' Not triggered by Safe-settings...')
+    const isSafeSettings = check_run.name === 'Safe-setting validator' || check_run.name === 'Safe-Settings'
+
+    // merge queue branches have the format gh-readonly-queue/<target-branch>/pr-<number>-<hash>
+    const mergeQueuePrNumber = parseInt(check_suite.head_branch.split('/').at(-1)?.split('-')[1])
+    const pullRequestNumber = pull_request?.number ?? mergeQueuePrNumber
+    const pullRequestRef = pull_request?.head?.ref ?? check_suite.head_branch
+
+    if (!isSafeSettings) {
+      robot.log.debug('Not triggered by Safe-settings...', { check_run })
       return
     }
 
     if (check_run.status === 'completed') {
-      robot.log.debug(' Checkrun created as completed, returning')
+      robot.log.debug('Checkrun created as completed, returning', { check_run })
       return
     }
 
     const adminRepo = repository.name === env.ADMIN_REPO
     robot.log.debug(`Is Admin repo event ${adminRepo}`)
     if (!adminRepo) {
-      robot.log.debug('Not working on the Admin repo, returning...')
+      robot.log.debug('Not working on the Admin repo, returning...', { repository, ADMIN_REPO: env.ADMIN_REPO })
       return
     }
 
-    if (!pull_request) {
-      robot.log.debug('Not working on a PR, returning...')
+    if (typeof pullRequestNumber !== 'number' || isNaN(pullRequestNumber)) {
+      robot.log.debug('Not working on a PR ...', { pullRequestNumber, mergeQueuePrNumber })
       return
     }
 
@@ -574,10 +577,12 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     // guarding against null value from upstream libary that is
     // causing a 404 and the check to stall
     // from issue: https://github.com/github/safe-settings/issues/185#issuecomment-1075240374
-    if (check_suite.before === '0000000000000000000000000000000000000000') {
-      check_suite.before = check_suite.pull_requests[0].base.sha
+    if (check_suite.before === '0000000000000000000000000000000000000000' && pull_request) {
+      check_suite.before = pull_request?.base?.sha ?? check_suite.head_sha
     }
-    params = Object.assign(context.repo(), { pull_number: pull_request.number, per_page: 100 })
+    params = Object.assign(context.repo(), { pull_number: pullRequestNumber, per_page: 100 })
+
+    robot.log.debug(`Fetchings files ${JSON.stringify(params)}`)
 
     const files = await context.octokit.paginate(context.octokit.pulls.listFiles, params, (response) => {
       const files = new Set()
@@ -593,26 +598,26 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       return Array.from(files)
     })
 
-    robot.log.debug('Files changed', { files })
+    robot.log.debug('Files changed', { files, params })
 
     const settingsModified = files.includes(Settings.FILE_PATH)
 
     if (settingsModified) {
       robot.log.debug(`Changes in '${Settings.FILE_PATH}' detected, doing a full synch...`)
-      return syncAllSettings(true, context, context.repo(), pull_request.head.ref)
+      return syncAllSettings(true, context, context.repo(), pullRequestRef)
     }
 
     const repoChanges = getChangedRepoConfigName(files, context.repo().owner)
     if (repoChanges.length > 0) {
       return Promise.all(repoChanges.map(repo => {
-        return syncSettings(true, context, repo, pull_request.head.ref)
+        return syncSettings(true, context, repo, pullRequestRef)
       }))
     }
 
     const subOrgChanges = getChangedSubOrgConfigName(files)
     if (subOrgChanges.length) {
       return Promise.all(subOrgChanges.map(suborg => {
-        return syncSubOrgSettings(true, context, suborg, context.repo(), pull_request.head.ref)
+        return syncSubOrgSettings(true, context, suborg, context.repo(), pullRequestRef)
       }))
     }
 
