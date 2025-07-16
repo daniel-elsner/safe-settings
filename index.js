@@ -511,11 +511,6 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
       return
     }
 
-    if (check_run.status === 'completed') {
-      robot.log.debug('Checkrun created as completed, returning', { check_run })
-      return
-    }
-
     const adminRepo = repository.name === env.ADMIN_REPO
     if (!adminRepo) {
       robot.log.debug('Not working on the Admin repo, returning...', { repository, ADMIN_REPO: env.ADMIN_REPO })
