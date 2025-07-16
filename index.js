@@ -457,16 +457,21 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     const { payload } = context
     const { repository } = payload
     const adminRepo = repository.name === env.ADMIN_REPO
-    robot.log.debug(`Is Admin repo event ${adminRepo}`)
+
     if (!adminRepo) {
       robot.log.debug('Not working on the Admin repo, returning...', { adminRepo, repository, ADMIN_REPO: env.ADMIN_REPO })
       return
+    } else {
+      robot.log.debug(`Is Admin repo event ${adminRepo}`)
     }
+
     const defaultBranch = payload.check_suite.head_branch === repository.default_branch
+
     if (defaultBranch) {
       robot.log.debug('Working on the default branch, returning...', { defaultBranch, check_suite: payload.check_suite })
       return
     }
+
     const {
       head_branch: headBranch,
       head_sha: headSha,
@@ -483,6 +488,27 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
 
     const pull_request = isPullRequest ? payload.check_suite.pull_requests[0] : null
     return createCheckRun(context, pull_request, headSha, headBranch)
+  })
+
+  robot.on(['check_run.rerequested'], async context => {
+    robot.log.debug('Check run was rerequested!')
+    const { payload } = context
+    const { repository } = payload
+    const adminRepo = repository.name === env.ADMIN_REPO
+
+    if (!adminRepo) {
+      robot.log.debug('Not working on the Admin repo, returning...', { adminRepo, repository, ADMIN_REPO: env.ADMIN_REPO })
+      return
+    } else {
+      robot.log.debug(`Is Admin repo event ${adminRepo}`)
+    }
+
+    const {
+      head_branch: headBranch,
+      head_sha: headSha
+    } = context.payload.check_run
+
+    return createCheckRun(context, undefined, headSha, headBranch)
   })
 
   robot.on('pull_request.opened', async context => {
