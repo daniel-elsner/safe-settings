@@ -491,24 +491,131 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
   })
 
   robot.on(['check_run.rerequested'], async context => {
-    robot.log.debug('Check run was rerequested!')
     const { payload } = context
     const { repository } = payload
-    const adminRepo = repository.name === env.ADMIN_REPO
+    const { check_run } = payload
+    const { check_suite } = check_run
 
+    robot.log.debug('Check run was rerequested!', { check_run })
+
+    const pull_request = check_suite.pull_requests[0]
+    const isSafeSettings = check_run.name === 'Safe-setting validator' || check_run.name === 'Safe-Settings'
+
+    // merge queue branches have the format gh-readonly-queue/<target-branch>/pr-<number>-<hash>
+    const mergeQueuePrNumber = parseInt(check_suite.head_branch.split('/').at(-1)?.split('-')[1])
+    const pullRequestNumber = pull_request?.number ?? mergeQueuePrNumber
+    const pullRequestRef = pull_request?.head?.ref ?? check_suite.head_branch
+
+    if (!isSafeSettings) {
+      robot.log.debug('Not triggered by Safe-settings...', { check_run })
+      return
+    }
+
+    if (check_run.status === 'completed') {
+      robot.log.debug('Checkrun created as completed, returning', { check_run })
+      return
+    }
+
+    const adminRepo = repository.name === env.ADMIN_REPO
     if (!adminRepo) {
-      robot.log.debug('Not working on the Admin repo, returning...', { adminRepo, repository, ADMIN_REPO: env.ADMIN_REPO })
+      robot.log.debug('Not working on the Admin repo, returning...', { repository, ADMIN_REPO: env.ADMIN_REPO })
       return
     } else {
       robot.log.debug(`Is Admin repo event ${adminRepo}`)
     }
 
-    const {
-      head_branch: headBranch,
-      head_sha: headSha
-    } = context.payload.check_run
+    let params = {
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      check_run_id: payload.check_run.id,
+      status: 'in_progress',
+      started_at: new Date().toISOString(),
+      output: { title: 'Starting NOP', summary: 'initiating...' }
+    }
 
-    return createCheckRun(context, undefined, headSha, headBranch)
+    robot.log.debug(`Updating check run ${JSON.stringify(params)}`)
+    await context.octokit.checks.update(params)
+
+    // guarding against null value from upstream libary that is
+    // causing a 404 and the check to stall
+    // from issue: https://github.com/github/safe-settings/issues/185#issuecomment-1075240374
+    if (check_suite.before === '0000000000000000000000000000000000000000' && pull_request) {
+      check_suite.before = pull_request?.base?.sha ?? check_suite.head_sha
+    }
+
+    const getChangedFiles = async (context, params) => {
+      if (pullRequestNumber && pullRequestRef) {
+        const fileParams = Object.assign(context.repo(), { pull_number: pullRequestNumber, per_page: 100 })
+        robot.log.debug(`Fetchings files via pull.listFiles ${JSON.stringify(fileParams)}`)
+
+        return await context.octokit.paginate(context.octokit.pulls.listFiles, fileParams, (response) => {
+          const files = new Set()
+
+          for (const file of response.data) {
+            files.add(file.filename)
+
+            if (file.previous_filename) {
+              files.add(file.previous_filename)
+            }
+          }
+
+          return Array.from(files)
+        })
+      } else {
+        const compareParams = Object.assign(context.repo(), { basehead: `${check_suite.before}...${check_suite.after}` })
+        robot.log.debug(`Fetchings files via compareCommitsWithBasehead ${JSON.stringify(compareParams)}`)
+        const changes = await context.octokit.repos.compareCommitsWithBasehead(compareParams)
+        const files = new Set()
+
+        for (const file of changes.data.files) {
+          files.add(file.filename)
+
+          if (file.previous_filename) {
+            files.add(file.previous_filename)
+          }
+        }
+
+        return Array.from(files)
+      }
+    }
+
+    const files = await getChangedFiles(context, params);
+
+    robot.log.debug('Files changed', { files })
+
+    const settingsModified = files.includes(Settings.FILE_PATH)
+
+    if (settingsModified) {
+      robot.log.debug(`Changes in '${Settings.FILE_PATH}' detected, doing a full synch...`)
+      return syncAllSettings(true, context, context.repo(), pullRequestRef)
+    }
+
+    const repoChanges = getChangedRepoConfigName(files, context.repo().owner)
+    if (repoChanges.length > 0) {
+      return Promise.all(repoChanges.map(repo => {
+        return syncSettings(true, context, repo, pullRequestRef)
+      }))
+    }
+
+    const subOrgChanges = getChangedSubOrgConfigName(files)
+    if (subOrgChanges.length) {
+      return Promise.all(subOrgChanges.map(suborg => {
+        return syncSubOrgSettings(true, context, suborg, context.repo(), pullRequestRef)
+      }))
+    }
+
+    // if no safe-settings changes detected, send a success to the check run
+    params = {
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      check_run_id: payload.check_run.id,
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      conclusion: 'success',
+      output: { title: 'No Safe-settings changes detected', summary: 'No changes detected' }
+    }
+    robot.log.debug(`Completing check run ${JSON.stringify(params)}`)
+    await context.octokit.checks.update(params)
   })
 
   robot.on('pull_request.opened', async context => {
