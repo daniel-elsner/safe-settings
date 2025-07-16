@@ -530,8 +530,8 @@ module.exports = (robot, { getRouter }, Settings = require('./lib/settings')) =>
     return createCheckRun(context)
   })
 
-  robot.on(['check_suite.rerequested'], async context => {
-    robot.log.debug('Check suite was rerequested!')
+  robot.on(['check_run.rerequested'], async context => {
+    robot.log.debug('Check run was rerequested!')
     return createCheckRun(context)
   })
 
